@@ -1,3 +1,4 @@
 tests/.env/
 *.zip
 __pycache__/
+dist/

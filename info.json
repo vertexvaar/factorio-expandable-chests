@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "title": "Expandable Chests",
   "author": "vertexvaar",
+  "homepage": "https://github.com/vertexvaar/factorio-expandable-chests",
   "factorio_version": "2.1",
   "description": "Link neighbouring chests of the same type into one shared inventory, like the cargo bays of Space Age. Each side is switched on or off in the chest window.",
-  "dependencies": ["base >= 2.0.0"]
+  "dependencies": [
+    "base >= 2.1.0"
+  ]
 }

@@ -92,6 +92,53 @@ script.on_event(defines.events.on_tick, function(event)
     remote.call("expandable-chests", "set_link", at(surface, 4, 3), 2, true)
     remote.call("expandable-chests", "set_link", at(surface, 5, 3), 2, true)
     at(surface, 4, 3).insert({ name = "coal", count = 1000 })
+
+    local function link_block(x1, y1, x2, y2)
+      for x = x1, x2 do
+        for y = y1, y2 do
+          if x < x2 then
+            remote.call("expandable-chests", "set_link", at(surface, x, y), 2, true)
+          end
+          if y < y2 then
+            remote.call("expandable-chests", "set_link", at(surface, x, y), 3, true)
+          end
+        end
+      end
+    end
+    -- Warehouse: 4x2 steel chests fed from a belt by inserters.
+    for x = 8, 11 do
+      for y = 0, 1 do
+        chest("steel-chest", x, y)
+      end
+    end
+    link_block(8, 0, 11, 1)
+    at(surface, 8, 0).insert({ name = "iron-gear-wheel", count = 2000 })
+    for x = 7, 12 do
+      local belt = surface.create_entity({ name = "transport-belt", position = { x + 0.5, -1.5 }, direction = defines.direction.east, force = player.force })
+      for line = 1, 2 do
+        local tl = belt.get_transport_line(line)
+        for _ = 1, 4 do
+          tl.insert_at_back({ name = "iron-gear-wheel", count = 1 })
+        end
+      end
+    end
+    for x = 8, 11 do
+      local inserter = surface.create_entity({ name = "burner-inserter", position = { x + 0.5, -0.5 }, direction = defines.direction.north, force = player.force })
+      inserter.get_fuel_inventory().insert({ name = "coal", count = 5 })
+    end
+    -- Thumbnail scenes: an empty 2x2 and 3x3 block of steel chests.
+    for x = 20, 21 do
+      for y = 0, 1 do
+        chest("steel-chest", x, y)
+      end
+    end
+    link_block(20, 0, 21, 1)
+    for x = 20, 22 do
+      for y = 6, 8 do
+        chest("steel-chest", x, y)
+      end
+    end
+    link_block(20, 6, 22, 8)
   elseif event.tick == scene_tick + 30 then
     local proxy = at(surface, 1, 0)
     report("opening", proxy.name, "size via proxy", #proxy.get_inventory(CHEST))
@@ -124,6 +171,15 @@ script.on_event(defines.events.on_tick, function(event)
     player.opened = nil
     shot(player, "5-alt-mode", false, true)
   elseif event.tick == scene_tick + 120 then
+    game.take_screenshot({ player = player, position = { 6, 1.5 }, resolution = { 1280, 720 }, zoom = 2,
+      path = "ec-shots/6-overview.png", show_gui = false, show_entity_info = true, force_render = true, daytime = 0 })
+    game.take_screenshot({ player = player, position = { 21, 1 }, resolution = { 144, 144 }, zoom = 1.4,
+      path = "ec-shots/thumb-2x2.png", show_gui = false, show_entity_info = true, force_render = true, daytime = 0 })
+    game.take_screenshot({ player = player, position = { 21.5, 7.5 }, resolution = { 144, 144 }, zoom = 1.0,
+      path = "ec-shots/thumb-3x3.png", show_gui = false, show_entity_info = true, force_render = true, daytime = 0 })
+    game.take_screenshot({ player = player, position = { 21.5, 7.5 }, resolution = { 288, 288 }, zoom = 2.0,
+      path = "ec-shots/thumb-3x3-big.png", show_gui = false, show_entity_info = true, force_render = true, daytime = 0 })
+  elseif event.tick == scene_tick + 130 then
     report("done")
   end
 end)

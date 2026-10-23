@@ -70,7 +70,7 @@ local copied_keys = {
   "circuit_wire_max_distance", "draw_circuit_wires", "draw_copper_wires", "open_sound", "close_sound",
   "impact_category", "surface_conditions", "heating_energy", "icon_draw_specification", "alert_icon_shift",
   "integration_patch", "integration_patch_render_layer", "quality_indicator_scale", "hit_visualization_box",
-  "working_sound", "map_color", "friendly_map_color", "enemy_map_color", "localised_description", "subgroup", "order",
+  "working_sound", "water_reflection", "map_color", "friendly_map_color", "enemy_map_color", "localised_description", "subgroup", "order",
 }
 
 local proxies = {}
@@ -88,7 +88,7 @@ for _, type in pairs({ "container", "logistic-container" }) do
         factoriopedia_alternative = name,
         placeable_by = { item = item, count = 1 },
         minable = entity.minable and { mining_time = entity.minable.mining_time, result = item, count = 1 },
-        picture = table.deepcopy(entity.picture) or to_sprite(entity.animation),
+        picture = table.deepcopy(entity.picture) or to_sprite(entity.robot_door and entity.robot_door.animation or entity.animation),
         draw_inventory_content = true,
         fast_replaceable_group = entity.fast_replaceable_group,
       }

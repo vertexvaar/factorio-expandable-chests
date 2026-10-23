@@ -6,3 +6,4 @@ Date: 2026-10-23
     - Works for wooden, iron and steel chests, all logistic chests and 1x1 chests from other mods.
     - Unlocked by its own technology at the same tier and cost as fluid handling.
     - Links survive blueprints, fast replace and upgrade planners; removed chests take their share of the items.
+    - Warns when several chests of a group report to the same circuit network and lets one chest report alone.
