@@ -167,6 +167,8 @@ local function swap(entity, name)
   local quality, health, last_user = entity.quality, entity.health, entity.last_user
   local marked = entity.to_be_deconstructed()
   local upgrade_target, upgrade_quality = entity.get_upgrade_target()
+  local behavior = entity.get_control_behavior()
+  local read_contents = behavior and behavior.read_contents
   local wires = {}
   for _, id in pairs({ defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }) do
     local connector = entity.get_wire_connector(id, false)
@@ -200,6 +202,12 @@ local function swap(entity, name)
   for _, wire in pairs(wires) do
     if wire.target.valid then
       new.get_wire_connector(wire.id, true).connect_to(wire.target, false, wire.origin)
+    end
+  end
+  if read_contents == false then
+    local new_behavior = new.get_or_create_control_behavior()
+    if new_behavior and new_behavior.read_contents ~= nil then
+      new_behavior.read_contents = false
     end
   end
   if marked then

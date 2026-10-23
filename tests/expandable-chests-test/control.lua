@@ -283,6 +283,66 @@ tests[#tests + 1] = function()
   surface.create_entity({ name = "wooden-chest", position = { x + 0.5, 26.5 }, force = force })
 end
 
+-- Circuit network: each chest of a group on its own red network; a pair sharing one network (checked after some ticks).
+local RED = defines.wire_connector_id.circuit_red
+local function wire(a, b)
+  a.get_wire_connector(RED, true).connect_to(b.get_wire_connector(RED, true))
+end
+
+tests[#tests + 1] = function()
+  for x = 0, 2 do
+    chest("steel-chest", x, 28)
+  end
+  call("set_link", at(0, 28), 2, true)
+  call("set_link", at(1, 28), 2, true)
+  fill(at(0, 28), "iron-plate", 500)
+  for x = 0, 2 do
+    local pole = surface.create_entity({ name = "small-electric-pole", position = { x + 0.5, 30.5 }, force = force })
+    wire(at(x, 28), pole)
+  end
+  chest("steel-chest", 0, 33); chest("steel-chest", 1, 33)
+  call("set_link", at(0, 33), 2, true)
+  fill(at(0, 33), "copper-plate", 300)
+  local shared = surface.create_entity({ name = "small-electric-pole", position = { 0.5, 35.5 }, force = force })
+  wire(at(0, 33), shared)
+  wire(at(1, 33), shared)
+  -- A wire added after linking, to a chest that is a proxy at that time.
+  chest("steel-chest", 4, 28); chest("steel-chest", 5, 28)
+  call("set_link", at(4, 28), 2, true)
+  fill(at(4, 28), "coal", 200)
+  -- Switching reading off survives the chest becoming a proxy and a real chest again.
+  chest("steel-chest", 8, 28); chest("steel-chest", 9, 28)
+  local quiet = surface.create_entity({ name = "small-electric-pole", position = { 8.5, 30.5 }, force = force })
+  wire(at(8, 28), quiet)
+  at(8, 28).get_or_create_control_behavior().read_contents = false
+  call("set_link", at(9, 28), 4, true)
+  local swapped = is_proxy(at(8, 28))
+  call("set_link", at(8, 28), 2, false)
+  check("read contents off kept", swapped and at(8, 28).get_control_behavior().read_contents == false, "was proxy: " .. tostring(swapped))
+  local late = surface.create_entity({ name = "small-electric-pole", position = { 4.5, 30.5 }, force = force })
+  local proxy = is_proxy(at(4, 28)) and at(4, 28) or at(5, 28)
+  wire(proxy, late)
+  storage.late_pole = late
+end
+
+local function signal(entity, item)
+  local network = entity.get_circuit_network(RED)
+  return network and network.get_signal({ type = "item", name = item }) or "no network"
+end
+
+local function check_circuits()
+  for x = 0, 2 do
+    local e = at(x, 28)
+    check("circuit " .. (is_proxy(e) and "proxy" or "master") .. " at " .. x .. " reads group", signal(e, "iron-plate") == 500,
+      signal(e, "iron-plate"))
+  end
+  log_line("INFO shared network copper", signal(at(0, 33), "copper-plate"))
+  local late = storage.late_pole
+  local n = late.get_circuit_network(RED)
+  check("circuit wire added to proxy later", n and n.get_signal({ type = "item", name = "coal" }) == 200,
+    n and n.get_signal({ type = "item", name = "coal" }))
+end
+
 -- Quality chests only link with the same quality and count their bigger size.
 tests[#tests + 1] = function()
   if not script.active_mods["quality"] then
@@ -324,6 +384,7 @@ script.on_event(defines.events.on_tick, function(event)
   elseif event.tick == 400 then
     local out = surface.find_entities_filtered({ name = "wooden-chest", area = { { 0, 26 }, { 2, 27 } } })[1]
     check("inserter takes from proxy", out and out.get_item_count("iron-gear-wheel") > 0, out and out.get_item_count("iron-gear-wheel"))
+    check_circuits()
     log_line("DONE", failures == 0 and "all passed" or (failures .. " failures"))
   end
 end)
