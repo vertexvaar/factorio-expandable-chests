@@ -27,6 +27,7 @@ local function init_storage()
   storage.detached = storage.detached or {} -- [surface index][tile key] = mask before marked for deconstruction
   storage.pending = storage.pending or {} -- [unit number] = inventory with items for the mining buffer
   storage.renders = storage.renders or {} -- [surface index][tile key] = render objects
+  storage.upgrading = storage.upgrading or {} -- [surface index][tile key] = mask before marked for upgrade
   storage.opened = storage.opened or {} -- [player index] = {entity = chest of the panel, window = entity of the window}
   storage.redirect = storage.redirect or {} -- [player index] = logistic proxy whose master window is being opened
 end
@@ -160,11 +161,12 @@ local function spill(inventory, surface, position, force)
   end
 end
 
--- Replaces a chest by its real or proxy variant, keeping wires, health and last user.
+-- Replaces a chest by its real or proxy variant, keeping wires, health, last user and orders.
 local function swap(entity, name)
   local surface, position, force = entity.surface, entity.position, entity.force
   local quality, health, last_user = entity.quality, entity.health, entity.last_user
   local marked = entity.to_be_deconstructed()
+  local upgrade_target, upgrade_quality = entity.get_upgrade_target()
   local wires = {}
   for _, id in pairs({ defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }) do
     local connector = entity.get_wire_connector(id, false)
@@ -202,6 +204,9 @@ local function swap(entity, name)
   end
   if marked then
     new.order_deconstruction(force)
+  end
+  if upgrade_target and not is_proxy(new) then
+    new.order_upgrade({ target = { name = upgrade_target.name, quality = upgrade_quality and upgrade_quality.name }, force = force })
   end
   return new
 end
@@ -376,18 +381,11 @@ end
 
 -- Takes a chest out of its group before it is removed. The group keeps its items as far as they fit; the rest goes
 -- into `sink`. A real chest keeps those items itself, so they come out when it is mined.
+-- The neighbours keep their side bits, so a chest that replaces this one (upgrade, fast replace) can link again.
 local function detach(entity, sink)
   local members = component(entity)
   local surface_index, key = entity.surface.index, tile_key(entity.position)
   local mask = get_mask(entity)
-  for _, dir in pairs(DIRS) do
-    if band(mask, dir.bit) ~= 0 then
-      local other = neighbour(entity, dir)
-      if other then
-        set_mask(other, band(get_mask(other), bnot(dir.opposite)))
-      end
-    end
-  end
   set_mask(entity, 0)
   clear_renders(surface_index, key)
   if #members == 1 then
@@ -417,6 +415,74 @@ local function detach(entity, sink)
   return mask
 end
 
+-- Chests removed in this tick, so that a chest built on the same tile (upgrade, fast replace) takes over their links
+-- and, for proxies replaced by robots, their share of the items.
+local function recent_entries()
+  local recent = storage.recent
+  if not recent or recent.tick ~= game.tick then
+    if recent then
+      for _, entry in pairs(recent.entries) do
+        -- Detached for a fast replace that did not happen: link the chest again.
+        if entry.entity and entry.entity.valid then
+          set_mask(entry.entity, entry.mask)
+          local items = entry.items
+          entry.items = nil
+          normalize({ entry.entity }, items)
+          if items and items.valid then
+            items.destroy()
+          end
+        end
+        if entry.items and entry.items.valid then
+          if entry.surface.valid then
+            spill(entry.items, entry.surface, entry.position, entry.force)
+          end
+          entry.items.destroy()
+        end
+      end
+    end
+    recent = { tick = game.tick, entries = {} }
+    storage.recent = recent
+  end
+  return recent.entries
+end
+
+-- `waiting` is set when the chest is detached ahead of a fast replace that may still fail.
+local function remember_removed(entity, mask, items, waiting)
+  local entries = recent_entries()
+  local key = entity.surface.index .. ":" .. tile_key(entity.position)
+  local entry = entries[key]
+  if entry then
+    -- Already detached before the replace; now it is really going away.
+    entry.entity = nil
+    if items and items.valid then
+      if entry.items and entry.items.valid then
+        move_all(items, entry.items)
+      end
+      if not items.is_empty() then
+        spill(items, entity.surface, entity.position)
+      end
+      items.destroy()
+    end
+    return
+  end
+  entries[key] = {
+    mask = mask,
+    items = items,
+    entity = waiting and entity or nil,
+    surface = entity.surface,
+    position = entity.position,
+    force = entity.force,
+  }
+end
+
+local function take_removed(entity)
+  local entries = recent_entries()
+  local key = entity.surface.index .. ":" .. tile_key(entity.position)
+  local entry = entries[key]
+  entries[key] = nil
+  return entry
+end
+
 -- Events -------------------------------------------------------------------------------------------------------------
 
 local function on_built(event)
@@ -425,9 +491,29 @@ local function on_built(event)
   if not base then
     return
   end
-  local mask = event.tags and event.tags.expandable_chests_mask or 0
+  local mask = event.tags and event.tags.expandable_chests_mask
+  local upgrading = storage.upgrading[entity.surface.index]
+  local key = tile_key(entity.position)
+  if upgrading and upgrading[key] then
+    mask = mask or upgrading[key]
+    upgrading[key] = nil
+  end
+  local replaced = take_removed(entity)
+  if replaced then
+    mask = mask or replaced.mask
+    if replaced.items and replaced.items.valid then
+      if not is_proxy(entity) then
+        move_all(replaced.items, entity.get_inventory(CHEST))
+      end
+      if not replaced.items.is_empty() then
+        spill(replaced.items, entity.surface, entity.position, entity.force)
+      end
+      replaced.items.destroy()
+    end
+  end
+  mask = mask or 0
   set_mask(entity, mask)
-  if mask == 0 and not is_proxy(entity) then
+  if mask == 0 and not is_proxy(entity) and not replaced then
     return
   end
   local seeds = { entity }
@@ -447,28 +533,41 @@ local function on_pre_mined(event)
   end
   if is_proxy(entity) then
     local pending = game.create_inventory(math.max(1, base_size(entity)))
-    detach(entity, pending)
+    local mask = detach(entity, pending)
     if pending.is_empty() then
       pending.destroy()
     else
       storage.pending[entity.unit_number] = pending
     end
+    remember_removed(entity, mask)
   else
-    detach(entity, entity.get_inventory(CHEST))
+    remember_removed(entity, detach(entity, entity.get_inventory(CHEST)))
   end
 end
 
 local function on_mined(event)
   local entity = event.entity
-  local pending = entity and storage.pending[entity.unit_number]
+  -- Robot upgrades skip the pre-mined event; the items have already gone to the replacement here.
+  if entity.valid and base_name(entity) and get_mask(entity) ~= 0 and #component(entity) > 1 then
+    remember_removed(entity, detach(entity))
+  end
+  local detached = storage.detached[entity.surface.index]
+  if detached then
+    detached[tile_key(entity.position)] = nil
+  end
+  local pending = storage.pending[entity.unit_number]
   if not pending then
     return
   end
   storage.pending[entity.unit_number] = nil
   if pending.valid then
     move_all(pending, event.buffer)
+    local player = event.player_index and game.get_player(event.player_index)
+    if player then
+      move_all(pending, player.get_main_inventory())
+    end
     if not pending.is_empty() then
-      spill(pending, entity.surface, entity.position, entity.force)
+      spill(pending, entity.surface, entity.position, not player and entity.force or nil)
     end
     pending.destroy()
   end
@@ -511,23 +610,23 @@ local function on_marked_for_deconstruction(event)
   end
 end
 
-local function on_cancelled_deconstruction(event)
-  local entity = event.entity
+-- Links a chest again with the sides it had before it was marked, where the neighbour isn't marked as well.
+local function restore(entity, saved)
   if not base_name(entity) then
     return
   end
-  local detached = storage.detached[entity.surface.index]
+  local t = saved[entity.surface.index]
   local key = tile_key(entity.position)
-  local mask = detached and detached[key]
+  local mask = t and t[key]
   if not mask then
     return
   end
-  detached[key] = nil
+  t[key] = nil
   local seeds = { entity }
   local restored = 0
   for _, dir in pairs(DIRS) do
     local other = band(mask, dir.bit) ~= 0 and neighbour(entity, dir)
-    if other and not other.to_be_deconstructed() then
+    if other and not other.to_be_deconstructed() and not other.to_be_upgraded() then
       restored = bor(restored, dir.bit)
       set_mask(other, bor(get_mask(other), dir.opposite))
       seeds[#seeds + 1] = other
@@ -535,6 +634,93 @@ local function on_cancelled_deconstruction(event)
   end
   set_mask(entity, restored)
   normalize(seeds)
+end
+
+local function on_cancelled_deconstruction(event)
+  restore(event.entity, storage.detached)
+end
+
+-- A player fast-replaces a chest by building over it. The game takes the items out of the old chest before any
+-- mining event, which would hand the whole group's items to the new chest, so the old chest leaves its group first.
+local function on_pre_build(event)
+  local player = game.get_player(event.player_index)
+  local stack = player and player.cursor_stack
+  local item = stack and stack.valid_for_read and stack.prototype
+  local result = item and item.place_result
+  if not (result and (result.type == "container" or result.type == "logistic-container")) then
+    return
+  end
+  local entity = player.surface.find_entities_filtered({
+    position = event.position,
+    type = { "container", "logistic-container", "proxy-container" },
+    limit = 1,
+  })[1]
+  if not base_name(entity) or #component(entity) == 1 then
+    return
+  end
+  if result.name == base_name(entity) and stack.quality.name == entity.quality.name then
+    return
+  end
+  if is_proxy(entity) then
+    local pending = game.create_inventory(math.max(1, base_size(entity)))
+    remember_removed(entity, detach(entity, pending), pending, true)
+  else
+    remember_removed(entity, detach(entity, entity.get_inventory(CHEST)), nil, true)
+  end
+end
+
+-- An upgrade replaces chests one by one with another type, which can't stay in the group anyway. The group is split
+-- into single chests with their share of the items, all marked for the upgrade. Each upgraded chest gets its old
+-- sides back when it is built, so the group links up again once its neighbours are upgraded too.
+local function on_marked_for_upgrade(event)
+  local entity = event.entity
+  local base = base_name(entity)
+  if not base or not event.target then
+    return
+  end
+  local members = component(entity)
+  if #members == 1 then
+    return
+  end
+  local target = { name = event.target.name, quality = event.quality and event.quality.name }
+  local surface = entity.surface
+  local saved = surface_table(storage.upgrading, surface.index)
+  local master, capacity = nil, 0
+  for _, member in pairs(members) do
+    saved[tile_key(member.position)] = get_mask(member)
+    set_mask(member, 0)
+    clear_renders(surface.index, tile_key(member.position))
+    if not is_proxy(member) then
+      master = member
+      capacity = capacity + #member.get_inventory(CHEST)
+    end
+  end
+  local pool = game.create_inventory(math.max(1, math.min(MAX_SLOTS, capacity)))
+  if master then
+    move_all(master.get_inventory(CHEST), pool)
+    master.set_inventory_size_override(CHEST, nil, pool)
+  end
+  local chests = {}
+  for _, member in pairs(members) do
+    local chest = is_proxy(member) and swap(member, base) or member
+    if chest then
+      chests[#chests + 1] = chest
+      move_all(pool, chest.get_inventory(CHEST))
+    end
+  end
+  if not pool.is_empty() and chests[1] then
+    spill(pool, surface, chests[1].position, chests[1].force)
+  end
+  pool.destroy()
+  for _, chest in pairs(chests) do
+    if not chest.to_be_upgraded() then
+      chest.order_upgrade({ target = target, force = chest.force, player = event.player_index })
+    end
+  end
+end
+
+local function on_cancelled_upgrade(event)
+  restore(event.entity, storage.upgrading)
 end
 
 local function on_setup_blueprint(event)
@@ -623,13 +809,16 @@ local function build_panel(player, entity, window)
       local dir = DIRS[cell]
       local other = neighbour(entity, dir)
       local linked = other and is_linked(entity, dir, other)
+      -- Chests waiting for robots to remove or upgrade them stay out of groups.
+      local busy = other and (entity.to_be_deconstructed() or entity.to_be_upgraded() or other.to_be_deconstructed()
+        or other.to_be_upgraded())
       local button = grid.add({
         type = "button",
         caption = { "expandable-chests.side-" .. dir.name },
         tooltip = { other and (linked and "expandable-chests.tooltip-linked" or "expandable-chests.tooltip-unlinked")
           or "expandable-chests.tooltip-none" },
         style = linked and "green_button" or "button",
-        enabled = other ~= nil,
+        enabled = other ~= nil and not busy,
         tags = { expandable_chests_side = cell },
       })
       button.style.width = 72
@@ -737,6 +926,9 @@ script.on_event(defines.events.on_entity_died, on_destroyed, filters)
 script.on_event(defines.events.script_raised_destroy, on_destroyed, filters)
 script.on_event(defines.events.on_marked_for_deconstruction, on_marked_for_deconstruction, filters)
 script.on_event(defines.events.on_cancelled_deconstruction, on_cancelled_deconstruction, filters)
+script.on_event(defines.events.on_pre_build, on_pre_build)
+script.on_event(defines.events.on_marked_for_upgrade, on_marked_for_upgrade, filters)
+script.on_event(defines.events.on_cancelled_upgrade, on_cancelled_upgrade, filters)
 script.on_event(defines.events.on_player_setup_blueprint, on_setup_blueprint)
 script.on_event(defines.events.on_gui_opened, on_gui_opened)
 script.on_event(defines.events.on_gui_closed, on_gui_closed)
@@ -756,6 +948,10 @@ remote.add_interface("expandable-chests", {
   end,
   build = function(entity, mask)
     on_built({ entity = entity, tags = { expandable_chests_mask = mask } })
+  end,
+  -- Runs the blueprint fix-up on a blueprint made by create_blueprint, for tests.
+  setup_blueprint = function(stack, mapping)
+    on_setup_blueprint({ stack = stack, mapping = { get = function() return mapping end } })
   end,
   -- Presses a side button in the open panel of a player, for tests.
   click_side = function(player_index, side)

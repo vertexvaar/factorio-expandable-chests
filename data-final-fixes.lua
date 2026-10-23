@@ -90,6 +90,7 @@ for _, type in pairs({ "container", "logistic-container" }) do
         minable = entity.minable and { mining_time = entity.minable.mining_time, result = item, count = 1 },
         picture = table.deepcopy(entity.picture) or to_sprite(entity.animation),
         draw_inventory_content = true,
+        fast_replaceable_group = entity.fast_replaceable_group,
       }
       for _, key in pairs(copied_keys) do
         if proxy[key] == nil and entity[key] ~= nil then
