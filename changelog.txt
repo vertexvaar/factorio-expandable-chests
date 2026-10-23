@@ -1,0 +1,7 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-10-23
+  Features:
+    - Link neighbouring chests of the same type into one shared inventory, side by side in the chest window.
+    - Works for wooden, iron and steel chests, all logistic chests and 1x1 chests from other mods.
+    - Unlocked by its own technology at the same tier and cost as fluid handling.
