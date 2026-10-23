@@ -788,6 +788,55 @@ local function window_of(entity)
   return entity
 end
 
+-- Circuit reading ----------------------------------------------------------------------------------------------------
+
+local WIRES = { defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }
+
+local function reads_contents(entity)
+  local behavior = entity.get_control_behavior()
+  return not behavior or behavior.read_contents ~= false
+end
+
+local function network_ids(entity)
+  local ids = {}
+  for _, id in pairs(WIRES) do
+    local network = entity.get_circuit_network(id)
+    if network then
+      ids[network.network_id] = true
+    end
+  end
+  return ids
+end
+
+-- Other chests of the group that report the group's contents to a circuit network this chest is on as well.
+-- Only checked when a chest window opens, so it costs nothing while the game runs.
+local function duplicate_readers(entity)
+  local ids = network_ids(entity)
+  if next(ids) == nil then
+    return {}
+  end
+  local result = {}
+  for _, member in pairs(component(entity)) do
+    if member ~= entity and reads_contents(member) then
+      for id in pairs(network_ids(member)) do
+        if ids[id] then
+          result[#result + 1] = member
+          break
+        end
+      end
+    end
+  end
+  return result
+end
+
+-- Lets only this chest report the group to the networks it shares with other chests of the group.
+local function make_sole_reader(entity)
+  for _, member in pairs(duplicate_readers(entity)) do
+    member.get_or_create_control_behavior().read_contents = false
+  end
+  entity.get_or_create_control_behavior().read_contents = true
+end
+
 -- Shows the side switches of `entity` next to the open window of `window`.
 local function build_panel(player, entity, window)
   destroy_panel(player)
@@ -838,6 +887,19 @@ local function build_panel(player, entity, window)
     slots = slots + base_size(member)
   end
   inner.add({ type = "label", caption = { "expandable-chests.group-size", #members, math.min(slots, MAX_SLOTS) } })
+  local duplicates = reads_contents(entity) and #duplicate_readers(entity) or 0
+  if duplicates > 0 then
+    local warning = inner.add({ type = "label", caption = { "expandable-chests.double-count", duplicates + 1 } })
+    warning.style.single_line = false
+    warning.style.maximal_width = 220
+    warning.style.font_color = { 1, 0.75, 0.2 }
+    inner.add({
+      type = "button",
+      caption = { "expandable-chests.sole-reader" },
+      tooltip = { "expandable-chests.sole-reader-tooltip" },
+      tags = { expandable_chests_sole_reader = true },
+    })
+  end
 end
 
 -- Opens the window for a chest, or just rebuilds the panel when that window is already open.
@@ -883,8 +945,9 @@ end
 
 local function on_gui_click(event)
   local element = event.element
-  local side = element.valid and element.tags and element.tags.expandable_chests_side
-  if not side then
+  local tags = element.valid and element.tags
+  local side = tags and tags.expandable_chests_side
+  if not (side or (tags and tags.expandable_chests_sole_reader)) then
     return
   end
   local player = game.get_player(event.player_index)
@@ -892,6 +955,11 @@ local function on_gui_click(event)
   local entity = opened and opened.entity
   if not (entity and entity.valid) then
     destroy_panel(player)
+    return
+  end
+  if not side then
+    make_sole_reader(entity)
+    build_panel(player, entity, opened.window)
     return
   end
   local dir = DIRS[side]
@@ -960,6 +1028,12 @@ remote.add_interface("expandable-chests", {
   -- Runs the blueprint fix-up on a blueprint made by create_blueprint, for tests.
   setup_blueprint = function(stack, mapping)
     on_setup_blueprint({ stack = stack, mapping = { get = function() return mapping end } })
+  end,
+  duplicate_readers = function(entity)
+    return duplicate_readers(entity)
+  end,
+  make_sole_reader = function(entity)
+    make_sole_reader(entity)
   end,
   -- Presses a side button in the open panel of a player, for tests.
   click_side = function(player_index, side)

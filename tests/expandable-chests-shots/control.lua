@@ -28,7 +28,7 @@ local function shot(player, name, gui, alt)
   game.take_screenshot({
     player = player,
     position = { 3, 2 },
-    resolution = { 1600, 900 },
+    resolution = { 1920, 1080 },
     zoom = 1.6,
     path = "ec-shots/" .. name .. ".png",
     show_gui = gui,
@@ -76,6 +76,11 @@ script.on_event(defines.events.on_tick, function(event)
     remote.call("expandable-chests", "set_link", at(surface, 2, 0), 3, true)
     chest("steel-chest", 2, 1)
     remote.call("expandable-chests", "set_link", at(surface, 2, 0), 3, true)
+    local pole = surface.create_entity({ name = "medium-electric-pole", position = { 1.5, -1.5 }, force = player.force })
+    for x = 0, 1 do
+      at(surface, x, 0).get_wire_connector(defines.wire_connector_id.circuit_red, true)
+        .connect_to(pole.get_wire_connector(defines.wire_connector_id.circuit_red, true))
+    end
     at(surface, 0, 0).insert({ name = "iron-plate", count = 5000 })
     at(surface, 0, 0).insert({ name = "copper-plate", count = 3000 })
     -- Row 3: requester chests and iron chests.

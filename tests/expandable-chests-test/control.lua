@@ -336,7 +336,12 @@ local function check_circuits()
     check("circuit " .. (is_proxy(e) and "proxy" or "master") .. " at " .. x .. " reads group", signal(e, "iron-plate") == 500,
       signal(e, "iron-plate"))
   end
-  log_line("INFO shared network copper", signal(at(0, 33), "copper-plate"))
+  check("double count is 2x", signal(at(0, 33), "copper-plate") == 600, signal(at(0, 33), "copper-plate"))
+  check("duplicate readers found", #call("duplicate_readers", at(1, 33)) == 1)
+  call("make_sole_reader", at(1, 33))
+  check("sole reader", #call("duplicate_readers", at(1, 33)) == 0 and at(0, 33).get_control_behavior().read_contents == false)
+  check("no duplicates on separate networks", #call("duplicate_readers", at(1, 28)) == 0)
+  storage.sole_checked = true
   local late = storage.late_pole
   local n = late.get_circuit_network(RED)
   check("circuit wire added to proxy later", n and n.get_signal({ type = "item", name = "coal" }) == 200,
@@ -385,6 +390,8 @@ script.on_event(defines.events.on_tick, function(event)
     local out = surface.find_entities_filtered({ name = "wooden-chest", area = { { 0, 26 }, { 2, 27 } } })[1]
     check("inserter takes from proxy", out and out.get_item_count("iron-gear-wheel") > 0, out and out.get_item_count("iron-gear-wheel"))
     check_circuits()
+  elseif event.tick == 420 then
+    check("sole reader counts once", signal(at(1, 33), "copper-plate") == 300, signal(at(1, 33), "copper-plate"))
     log_line("DONE", failures == 0 and "all passed" or (failures .. " failures"))
   end
 end)

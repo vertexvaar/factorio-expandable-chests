@@ -36,6 +36,7 @@ def play(harness, output, timeout=180):
         time.sleep(1)
     finally:
         game.kill()
+        game.wait(timeout=30)
     log = os.path.join(run.ENV, "write", "factorio-current.log")
     if os.path.exists(log):
         errors = [l for l in open(log, errors="replace").read().splitlines() if "Error" in l]

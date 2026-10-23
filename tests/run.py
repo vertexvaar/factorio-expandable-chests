@@ -60,7 +60,7 @@ def main():
     if created.returncode != 0 or not os.path.exists(save):
         print(created.stdout[-4000:], created.stderr[-2000:])
         sys.exit("map creation failed")
-    bench = run(exe, "--benchmark", save, "--benchmark-ticks", "420", "--benchmark-runs", "1")
+    bench = run(exe, "--benchmark", save, "--benchmark-ticks", "450", "--benchmark-runs", "1")
     log_path = os.path.join(ENV, "write", "factorio-current.log")
     log = open(log_path, encoding="utf-8", errors="replace").read() if os.path.exists(log_path) else bench.stdout
     lines = [l for l in log.splitlines() if "ECTEST" in l or "Error" in l]
