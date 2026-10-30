@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026-10-30
+  Graphics:
+    - Linked chests are drawn as one big chest: pieces of the chest sprite cover the seams between them.
+---------------------------------------------------------------------------------------------------
 Version: 0.1.0
 Date: 2026-10-23
   Features:
