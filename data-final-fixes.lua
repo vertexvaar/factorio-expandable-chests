@@ -107,14 +107,43 @@ end
 
 -- Seam pieces -----------------------------------------------------------------------------------------------------
 -- Linked chests get pieces of their own sprite drawn over the seams (control.lua), so a group looks like one big chest.
--- Areas are in tiles relative to the chest centre and were measured on the 2.1 chests. Each chest may override them.
+-- All values are in tiles relative to the chest centre and were measured on the 2.1 sprites:
+--   inner  inner edges of the lid frame; side pieces span from the right edge to the left edge of the chest to the
+--          east, front pieces from the bottom edge to the top edge of the chest to the south
+--   side   columns copied at full height over a side seam, clear of locks, doors and bolts
+--   lid    rows of the lid that are stretched over a front seam
+--   fill   columns of those rows repeated across the inside of the lid (defaults to side)
 local default_layout = {
-  body = { -0.31, -0.06 },     -- columns of the body copied over a side seam (left of the lock)
-  lid = { -0.41, -0.16 },      -- rows of the lid that are stretched over a front seam
-  front = -0.05,               -- where the front face starts
-  rim = 0.47,                  -- lower edge of the rim of the chest to the south, relative to the northern chest
+  inner = { left = -0.33, top = -0.51, right = 0.31, bottom = -0.17 },
+  side = { 0.19, 0.31 },
+  lid = { -0.51, -0.17 },
 }
-local layouts = {}
+local logistic_layout = {
+  inner = { left = -0.39, top = -0.6, right = 0.36, bottom = -0.2 },
+  side = { 0.22, 0.36 },
+  lid = { -0.53, -0.33 },
+  fill = { 0.235, 0.28 },
+}
+local layouts = {
+  ["wooden-chest"] = {
+    inner = { left = -0.33, top = -0.49, right = 0.38, bottom = -0.1 },
+    side = { 0, 0.29 },
+    lid = { -0.485, -0.1 },
+    fill = { -0.33, 0.38 },
+  },
+  ["iron-chest"] = default_layout,
+  ["steel-chest"] = {
+    inner = { left = -0.4, top = -0.48, right = 0.34, bottom = -0.09 },
+    side = { 0.1, 0.33 },
+    lid = { -0.47, -0.1 },
+    fill = { -0.4, 0.34 },
+  },
+  ["passive-provider-chest"] = logistic_layout,
+  ["active-provider-chest"] = logistic_layout,
+  ["storage-chest"] = logistic_layout,
+  ["buffer-chest"] = logistic_layout,
+  ["requester-chest"] = logistic_layout,
+}
 
 local function to_xy(v)
   if not v then
@@ -154,50 +183,80 @@ for _, proxy in pairs(proxies) do
   end
   if layer and width and height then
     local layout = layouts[base] or default_layout
+    local inner = layout.inner
     local scale = layer.scale or 1
     local px = 32 / scale -- source pixels per tile
     local sx, sy = to_xy(layer.shift)
     local x0, y0 = to_xy({ layer.x, layer.y })
     local left, top = sx - width / px / 2, sy - height / px / 2
 
-    -- Converts a span in tiles into whole source pixels inside the frame and back.
+    -- Converts a span in tiles into whole source pixels inside the frame: first pixel, pixel count, centre in tiles.
     local function span(from, to, origin, size)
       local a = math.max(0, math.floor((from - origin) * px + 0.5))
       local b = math.min(size, math.floor((to - origin) * px + 0.5))
-      return a, b - a, origin + (a + b) / 2 / px, (b - a) / px
+      return a, b - a, origin + (a + b) / 2 / px
     end
-    local function piece(name, cx, cw, cy, ch)
-      seam_sprites[#seam_sprites + 1] = {
-        type = "sprite",
-        name = name,
+    local function part(cx, cw, cy, ch, shift)
+      return {
         filename = layer.filename,
         x = x0 + cx,
         y = y0 + cy,
         width = cw,
         height = ch,
         scale = scale,
+        shift = shift,
         priority = "medium",
       }
     end
 
-    local bx, bw = span(layout.body[1], layout.body[2], left, width)
-    local ly, lh, _, lid = span(layout.lid[1], layout.lid[2], top, height)
-    if bw > 0 and lh > 0 then
-      local stretch = (layout.rim - layout.front) / lid
-      local seam_y = (layout.front + layout.rim) / 2
-      local names = {
-        side = "expandable-chests-seam-side-" .. base,
-        front = "expandable-chests-seam-front-" .. base,
-        middle = "expandable-chests-seam-middle-" .. base,
-      }
-      piece(names.side, bx, bw, 0, height)
-      piece(names.front, 0, width, ly, lh)
-      piece(names.middle, bx, bw, ly, lh)
-      -- Offsets from the northern or western chest, so that the piece sits centred on the seam.
+    local bx, bw = span(layout.side[1], layout.side[2], left, width)
+    local by, bh, body_y = span(top, 0.5, top, height) -- not below the own tile, where an unlinked chest may stand
+    local ly, lh = span(layout.lid[1], layout.lid[2], top, height)
+    local fill = layout.fill or layout.side
+    local fx, fw = span(fill[1], fill[2], left, width)
+    if bw > 0 and bh > 0 and lh > 0 and fw > 0 then
+      local side = part(bx, bw, by, bh)
+      side.type, side.name = "sprite", "expandable-chests-seam-side-" .. base
+      table.insert(seam_sprites, side)
+
+      -- Front: the lid rows with the lid frame on both sides and the fill repeated in between. Where the chest to the
+      -- west or east has a front piece too, that side has no frame and the fill runs up to the seam instead.
+      local el, ew, ec = span(left, inner.left, left, width)
+      local er, erw, erc = span(inner.right, left + width / px, left, width)
+      local fronts = {}
+      for _, open in pairs({ "", "w", "e", "we" }) do
+        local layers = {}
+        local from = open:find("w") and math.floor((-0.5 - left) * px + 0.5) or el + ew
+        local to = open:find("e") and math.floor((0.5 - left) * px + 0.5) or er
+        local x = from
+        while x < to do
+          local at = math.min(x, to - fw)
+          layers[#layers + 1] = part(fx, fw, ly, lh, { left + (at + fw / 2) / px, 0 })
+          x = x + fw
+        end
+        if not open:find("w") then
+          layers[#layers + 1] = part(el, ew, ly, lh, { ec, 0 })
+        end
+        if not open:find("e") then
+          layers[#layers + 1] = part(er, erw, ly, lh, { erc, 0 })
+        end
+        local name = "expandable-chests-seam-front-" .. (open == "" and "" or open .. "-") .. base
+        table.insert(seam_sprites, { type = "sprite", name = name, layers = layers })
+        fronts[open] = name
+      end
+
+      -- Offsets from the northern or western chest.
       seams[base] = {
-        side = { sprite = names.side, offset = { 0.5, sy } },
-        front = { sprite = names.front, offset = { sx, seam_y }, y_scale = stretch },
-        middle = { sprite = names.middle, offset = { 0.5, seam_y }, y_scale = stretch },
+        side = {
+          sprite = side.name,
+          offset = { (inner.right + 1 + inner.left) / 2, body_y },
+          x_scale = (1 + inner.left - inner.right) / (bw / px),
+        },
+        front = {
+          sprites = fronts,
+          offset = { 0, (inner.bottom + 1 + inner.top) / 2 },
+          y_scale = (1 + inner.top - inner.bottom) / (lh / px),
+        },
       }
     end
   end

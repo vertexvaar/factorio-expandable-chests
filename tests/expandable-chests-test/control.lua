@@ -362,15 +362,18 @@ tests[#tests + 1] = function()
   check("quality group", #group == 2 and size(master_of(group)) == expected, #group .. " " .. size(master_of(group)) .. "/" .. expected)
 end
 
--- Seam pieces: a linked 2x2 block gets two side, two front and one middle piece; unlinking one side drops the
--- middle piece and that side piece.
+-- Seam pieces: a linked 2x2 block gets two side and two front pieces, and the front pieces run up to the middle seam;
+-- unlinking one side drops that side piece and closes the front pieces again.
 local function seam_pieces()
-  local found = { side = 0, front = 0, middle = 0 }
+  local found = { side = 0, front = 0, open = 0 }
   for _, object in pairs(rendering.get_all_objects("expandable-chests")) do
     if object.type == "sprite" then
       local kind = tostring(object.sprite):match("^expandable%-chests%-seam%-(%a+)%-")
       if kind then
         found[kind] = found[kind] + 1
+      end
+      if tostring(object.sprite):match("^expandable%-chests%-seam%-front%-[we]+%-") then
+        found.open = found.open + 1
       end
     end
   end
@@ -379,7 +382,7 @@ end
 
 tests[#tests + 1] = function()
   for _, name in pairs({ "wooden-chest", "iron-chest", "steel-chest", "passive-provider-chest", "requester-chest" }) do
-    for _, kind in pairs({ "side", "front", "middle" }) do
+    for _, kind in pairs({ "side", "front", "front-w", "front-e", "front-we" }) do
       check("seam sprite " .. kind .. " " .. name, helpers.is_valid_sprite_path("expandable-chests-seam-" .. kind .. "-" .. name))
     end
   end
@@ -387,14 +390,14 @@ tests[#tests + 1] = function()
   chest("iron-chest", 0, 36); chest("iron-chest", 1, 36); chest("iron-chest", 0, 37); chest("iron-chest", 1, 37)
   call("set_link", at(0, 36), 2, true)
   call("set_link", at(0, 37), 2, true)
-  call("set_link", at(0, 36), 4, true)
-  call("set_link", at(1, 36), 4, true)
+  call("set_link", at(0, 36), 3, true)
+  call("set_link", at(1, 36), 3, true)
   local after = seam_pieces()
-  local diff = (after.side - before.side) .. "/" .. (after.front - before.front) .. "/" .. (after.middle - before.middle)
-  check("seam pieces 2x2", diff == "2/2/1", diff)
+  local diff = (after.side - before.side) .. "/" .. (after.front - before.front) .. "/" .. (after.open - before.open)
+  check("seam pieces 2x2", diff == "2/2/2", diff)
   call("set_link", at(0, 37), 2, false)
   local split = seam_pieces()
-  diff = (split.side - before.side) .. "/" .. (split.front - before.front) .. "/" .. (split.middle - before.middle)
+  diff = (split.side - before.side) .. "/" .. (split.front - before.front) .. "/" .. (split.open - before.open)
   check("seam pieces after unlink", diff == "1/2/0", diff)
 end
 

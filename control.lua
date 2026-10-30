@@ -243,26 +243,37 @@ local function seam_pieces(base)
   return seams[base]
 end
 
-local function draw_seam(objects, entity, piece)
+local function draw_seam(objects, entity, piece, sprite, layer)
   objects[#objects + 1] = rendering.draw_sprite({
-    sprite = piece.sprite,
+    sprite = sprite,
     surface = entity.surface,
     target = { entity = entity, offset = piece.offset },
+    x_scale = piece.x_scale,
     y_scale = piece.y_scale,
-    render_layer = "higher-object-under",
+    render_layer = layer,
   })
 end
 
+-- Whether the given chest and the one to its east are linked to each other and to the south, and the two chests to the
+-- south are linked to each other as well.
+local function is_cross(entity, east)
+  local south = neighbour(entity, DIRS[3])
+  local corner = neighbour(east, DIRS[3])
+  return south and corner and is_linked(entity, DIRS[3], south) and is_linked(east, DIRS[3], corner)
+    and is_linked(south, DIRS[2], corner)
+end
+
 -- Draws the links to the east and south of every member, so that every link is drawn once, and the seam pieces that
--- join the chests: one over each side seam, one over each front seam and one over the middle of every linked 2x2
--- block. Pieces drawn later cover earlier ones, so all side pieces go first and the middle pieces last.
+-- join the chests: one over each side seam and one over each front seam. Front pieces go on the layer above the side
+-- pieces, because pieces in one layer are sorted by position rather than drawn in order. Where four chests meet, the
+-- front pieces of both northern chests run up to the seam between them and so close the middle.
 local function draw_links(members)
-  local links = {}
-  for i, entity in pairs(members) do
+  for _, entity in pairs(members) do
     local key = tile_key(entity.position)
     clear_renders(entity.surface.index, key)
     local objects = {}
-    local link = { entity = entity, objects = objects, pieces = seam_pieces(base_name(entity)) }
+    local pieces = seam_pieces(base_name(entity))
+    local links = {}
     for _, dir in pairs({ DIRS[2], DIRS[3] }) do
       local other = neighbour(entity, dir)
       if other and is_linked(entity, dir, other) then
@@ -274,30 +285,19 @@ local function draw_links(members)
           width = 6,
           only_in_alt_mode = true,
         })
-        link[dir.name] = other
+        links[dir.name] = other
       end
     end
-    links[i] = link
+    if pieces and links.east then
+      draw_seam(objects, entity, pieces.side, pieces.side.sprite, "higher-object-under")
+    end
+    if pieces and links.south then
+      local west = neighbour(entity, DIRS[4])
+      local open = ((west and is_linked(entity, DIRS[4], west) and is_cross(west, entity)) and "w" or "")
+        .. ((links.east and is_cross(entity, links.east)) and "e" or "")
+      draw_seam(objects, entity, pieces.front, pieces.front.sprites[open], "higher-object-above")
+    end
     surface_table(storage.renders, entity.surface.index)[key] = objects
-  end
-  for _, link in pairs(links) do
-    if link.pieces and link.east then
-      draw_seam(link.objects, link.entity, link.pieces.side)
-    end
-  end
-  for _, link in pairs(links) do
-    if link.pieces and link.south then
-      draw_seam(link.objects, link.entity, link.pieces.front)
-    end
-  end
-  for _, link in pairs(links) do
-    local east, south = link.east, link.south
-    if link.pieces and east and south then
-      local corner = neighbour(east, DIRS[3])
-      if corner and is_linked(east, DIRS[3], corner) and is_linked(south, DIRS[2], corner) then
-        draw_seam(link.objects, link.entity, link.pieces.middle)
-      end
-    end
   end
 end
 
