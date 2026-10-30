@@ -104,3 +104,105 @@ end
 if #proxies > 0 then
   data:extend(proxies)
 end
+
+-- Seam pieces -----------------------------------------------------------------------------------------------------
+-- Linked chests get pieces of their own sprite drawn over the seams (control.lua), so a group looks like one big chest.
+-- Areas are in tiles relative to the chest centre and were measured on the 2.1 chests. Each chest may override them.
+local default_layout = {
+  body = { -0.31, -0.06 },     -- columns of the body copied over a side seam (left of the lock)
+  lid = { -0.41, -0.16 },      -- rows of the lid that are stretched over a front seam
+  front = -0.05,               -- where the front face starts
+  rim = 0.47,                  -- lower edge of the rim of the chest to the south, relative to the northern chest
+}
+local layouts = {}
+
+local function to_xy(v)
+  if not v then
+    return 0, 0
+  end
+  return v[1] or v.x or 0, v[2] or v.y or 0
+end
+
+-- The first layer that is drawn as the chest itself.
+local function main_layer(sprite)
+  if not sprite then
+    return nil
+  end
+  if sprite.layers then
+    for _, layer in pairs(sprite.layers) do
+      local found = main_layer(layer)
+      if found then
+        return found
+      end
+    end
+    return nil
+  end
+  if sprite.draw_as_shadow or sprite.draw_as_glow or sprite.draw_as_light or not sprite.filename then
+    return nil
+  end
+  return sprite
+end
+
+local seam_sprites = {}
+local seams = {}
+for _, proxy in pairs(proxies) do
+  local base = proxy.name:sub(#shared.proxy_prefix + 1)
+  local layer = main_layer(proxy.picture)
+  local width, height = layer and (layer.width or layer.size), layer and (layer.height or layer.size)
+  if type(width) == "table" then
+    width, height = width[1], width[2]
+  end
+  if layer and width and height then
+    local layout = layouts[base] or default_layout
+    local scale = layer.scale or 1
+    local px = 32 / scale -- source pixels per tile
+    local sx, sy = to_xy(layer.shift)
+    local x0, y0 = to_xy({ layer.x, layer.y })
+    local left, top = sx - width / px / 2, sy - height / px / 2
+
+    -- Converts a span in tiles into whole source pixels inside the frame and back.
+    local function span(from, to, origin, size)
+      local a = math.max(0, math.floor((from - origin) * px + 0.5))
+      local b = math.min(size, math.floor((to - origin) * px + 0.5))
+      return a, b - a, origin + (a + b) / 2 / px, (b - a) / px
+    end
+    local function piece(name, cx, cw, cy, ch)
+      seam_sprites[#seam_sprites + 1] = {
+        type = "sprite",
+        name = name,
+        filename = layer.filename,
+        x = x0 + cx,
+        y = y0 + cy,
+        width = cw,
+        height = ch,
+        scale = scale,
+        priority = "medium",
+      }
+    end
+
+    local bx, bw = span(layout.body[1], layout.body[2], left, width)
+    local ly, lh, _, lid = span(layout.lid[1], layout.lid[2], top, height)
+    if bw > 0 and lh > 0 then
+      local stretch = (layout.rim - layout.front) / lid
+      local seam_y = (layout.front + layout.rim) / 2
+      local names = {
+        side = "expandable-chests-seam-side-" .. base,
+        front = "expandable-chests-seam-front-" .. base,
+        middle = "expandable-chests-seam-middle-" .. base,
+      }
+      piece(names.side, bx, bw, 0, height)
+      piece(names.front, 0, width, ly, lh)
+      piece(names.middle, bx, bw, ly, lh)
+      -- Offsets from the northern or western chest, so that the piece sits centred on the seam.
+      seams[base] = {
+        side = { sprite = names.side, offset = { 0.5, sy } },
+        front = { sprite = names.front, offset = { sx, seam_y }, y_scale = stretch },
+        middle = { sprite = names.middle, offset = { 0.5, seam_y }, y_scale = stretch },
+      }
+    end
+  end
+end
+if #seam_sprites > 0 then
+  data:extend(seam_sprites)
+end
+data:extend({ { type = "mod-data", name = shared.seams, data = seams } })
