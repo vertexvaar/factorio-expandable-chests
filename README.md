@@ -15,6 +15,23 @@ like the cargo bays of a space platform hub. Each side is switched on or off in 
 Each group has one real chest whose inventory size is overridden to the group's total. The other chests are swapped
 for look-alike proxy containers that forward inserters, robots and the player to that chest. Nothing runs per tick.
 
+## Expandable Chests and Merging Chests
+
+[Merging Chests](https://mods.factorio.com/mod/WideChests) by Atria (with its add-on WideChestsLogistic for logistic chests) is a great mod with a similar goal. Both mods let several chests share one inventory, and they take different approaches, so you can pick what suits your factory:
+
+**Merging Chests may suit you if you like**
+- one large chest, warehouse or trash dump with its own matching graphics
+- merging and splitting many chests at once with a selection tool
+- fine control through mod settings: maximum sizes, inventory multipliers and which chest types can merge
+
+**Expandable Chests may suit you if you like**
+- chests that keep their place and look while sharing their inventory
+- groups of any shape, for example an L or a ring around a machine
+- linking each side directly in a panel next to the chest window
+- a setup that works right away for all vanilla chests, logistic chests and 1x1 chests from other mods
+
+The two mods have not been tested together yet.
+
 ## Tests
 
     python tests/run.py                 # headless, with Space Age
