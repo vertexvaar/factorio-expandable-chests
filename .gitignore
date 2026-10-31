@@ -2,3 +2,4 @@ tests/.env/
 *.zip
 __pycache__/
 dist/
+previews/seams/close/

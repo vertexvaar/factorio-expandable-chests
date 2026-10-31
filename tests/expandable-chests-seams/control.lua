@@ -107,6 +107,19 @@ script.on_event(defines.events.on_tick, function(event)
         force_render = true,
         daytime = 0,
       })
+      -- Close-ups of the 2x2 and L shapes and the 3x3 block at twice the sprite resolution.
+      for _, close in pairs({ { "2x2", 6, 1 }, { "l", 9, 1 }, { "3x3", 12.5, 1.5 } }) do
+        game.take_screenshot({
+          player = player,
+          position = { close[2], y0 + close[3] },
+          resolution = close[1] == "3x3" and { 896, 896 } or { 640, 640 },
+          zoom = 4,
+          path = "ec-seams/close/" .. name .. "-" .. close[1] .. ".png",
+          show_entity_info = false,
+          force_render = true,
+          daytime = 0,
+        })
+      end
     end
   elseif event.tick > scene_tick + 30 and event.tick <= scene_tick + 150 and event.tick % 8 == 0 then
     for _, name in pairs({ "iron-chest", "requester-chest" }) do

@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 2026-10-31
+  Graphics:
+    - Linked chests look like one big chest: frames and fronts between them are gone, lid and front run on.
+    - Logistic chests become one big lid with a robot door per chest; the real chest keeps its animated door.
+  Bugfixes:
+    - Fixed flat, stretched strips and leftover frames between linked chests, especially on logistic chests.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.0
 Date: 2026-10-30
   Graphics:

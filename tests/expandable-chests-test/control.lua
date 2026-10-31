@@ -362,43 +362,40 @@ tests[#tests + 1] = function()
   check("quality group", #group == 2 and size(master_of(group)) == expected, #group .. " " .. size(master_of(group)) .. "/" .. expected)
 end
 
--- Seam pieces: a linked 2x2 block gets two side and two front pieces, and the front pieces run up to the middle seam;
--- unlinking one side drops that side piece and closes the front pieces again.
-local function seam_pieces()
-  local found = { side = 0, front = 0, open = 0 }
+-- Overlays: every chest of a linked 2x2 block gets the overlay for its linked sides; unlinking one side changes the
+-- overlays of both chests on that side.
+local function overlays(y)
+  local found = {}
   for _, object in pairs(rendering.get_all_objects("expandable-chests")) do
-    if object.type == "sprite" then
-      local kind = tostring(object.sprite):match("^expandable%-chests%-seam%-(%a+)%-")
-      if kind then
-        found[kind] = found[kind] + 1
-      end
-      if tostring(object.sprite):match("^expandable%-chests%-seam%-front%-[we]+%-") then
-        found.open = found.open + 1
-      end
+    local entity = object.type == "sprite" and object.target.entity
+    if entity and entity.valid and math.floor(entity.position.y) >= y and math.floor(entity.position.y) <= y + 1 then
+      local key = math.floor(entity.position.x) .. "," .. math.floor(entity.position.y)
+      found[key] = (found[key] and found[key] .. " " or "") .. tostring(object.sprite):gsub("^expandable%-chests%-overlay%-", "")
     end
   end
-  return found
+  return table.concat({ found["0,36"] or "-", found["1,36"] or "-", found["0,37"] or "-", found["1,37"] or "-" }, "/")
 end
 
 tests[#tests + 1] = function()
   for _, name in pairs({ "wooden-chest", "iron-chest", "steel-chest", "passive-provider-chest", "requester-chest" }) do
-    for _, kind in pairs({ "side", "front", "front-w", "front-e", "front-we" }) do
-      check("seam sprite " .. kind .. " " .. name, helpers.is_valid_sprite_path("expandable-chests-seam-" .. kind .. "-" .. name))
+    for mask = 1, 15 do
+      check("overlay sprite " .. mask .. " " .. name, helpers.is_valid_sprite_path("expandable-chests-overlay-" .. name .. "-" .. mask))
     end
   end
-  local before = seam_pieces()
+  check("overlay door sprite", helpers.is_valid_sprite_path("expandable-chests-overlay-requester-chest-6-door")
+    and not helpers.is_valid_sprite_path("expandable-chests-overlay-requester-chest-1-door")
+    and not helpers.is_valid_sprite_path("expandable-chests-overlay-iron-chest-6-door"))
   chest("iron-chest", 0, 36); chest("iron-chest", 1, 36); chest("iron-chest", 0, 37); chest("iron-chest", 1, 37)
+  check("no overlays unlinked", overlays(36) == "-/-/-/-", overlays(36))
   call("set_link", at(0, 36), 2, true)
   call("set_link", at(0, 37), 2, true)
   call("set_link", at(0, 36), 3, true)
   call("set_link", at(1, 36), 3, true)
-  local after = seam_pieces()
-  local diff = (after.side - before.side) .. "/" .. (after.front - before.front) .. "/" .. (after.open - before.open)
-  check("seam pieces 2x2", diff == "2/2/2", diff)
+  local expected = "iron-chest-6/iron-chest-12/iron-chest-3/iron-chest-9"
+  check("overlays 2x2", overlays(36) == expected, overlays(36))
   call("set_link", at(0, 37), 2, false)
-  local split = seam_pieces()
-  diff = (split.side - before.side) .. "/" .. (split.front - before.front) .. "/" .. (split.open - before.open)
-  check("seam pieces after unlink", diff == "1/2/0", diff)
+  expected = "iron-chest-6/iron-chest-12/iron-chest-1/iron-chest-1"
+  check("overlays after unlink", overlays(36) == expected, overlays(36))
 end
 
 script.on_event(defines.events.on_tick, function(event)
