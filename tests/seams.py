@@ -16,10 +16,13 @@ def main():
     if not os.path.isdir(out_dir):
         sys.exit("no screenshots taken")
     os.makedirs(out, exist_ok=True)
-    for name in sorted(os.listdir(out_dir)):
-        if name.endswith(".png"):
-            shutil.copy(os.path.join(out_dir, name), out)
-            print(os.path.join(out, name))
+    for sub in ["", "close"]:
+        src, dst = os.path.join(out_dir, sub), os.path.join(out, sub)
+        os.makedirs(dst, exist_ok=True)
+        for name in sorted(os.listdir(src)):
+            if name.endswith(".png"):
+                shutil.copy(os.path.join(src, name), dst)
+                print(os.path.join(dst, name))
 
 
 if __name__ == "__main__":

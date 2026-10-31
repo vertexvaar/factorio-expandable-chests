@@ -234,68 +234,54 @@ local function clear_renders(surface_index, key)
   end
 end
 
-local seams
-local function seam_pieces(base)
-  if not seams then
+local overlays
+local function overlay_info(base)
+  if not overlays then
     local mod_data = prototypes.mod_data[shared.seams]
-    seams = mod_data and mod_data.data or {}
+    overlays = mod_data and mod_data.data or {}
   end
-  return seams[base]
+  return overlays[base]
 end
 
-local function draw_seam(objects, entity, piece, sprite, layer)
-  objects[#objects + 1] = rendering.draw_sprite({
-    sprite = sprite,
-    surface = entity.surface,
-    target = { entity = entity, offset = piece.offset },
-    x_scale = piece.x_scale,
-    y_scale = piece.y_scale,
-    render_layer = layer,
-  })
-end
-
--- Whether the given chest and the one to its east are linked to each other and to the south, and the two chests to the
--- south are linked to each other as well.
-local function is_cross(entity, east)
-  local south = neighbour(entity, DIRS[3])
-  local corner = neighbour(east, DIRS[3])
-  return south and corner and is_linked(entity, DIRS[3], south) and is_linked(east, DIRS[3], corner)
-    and is_linked(south, DIRS[2], corner)
-end
-
--- Draws the links to the east and south of every member, so that every link is drawn once, and the seam pieces that
--- join the chests: one over each side seam and one over each front seam. Front pieces go on the layer above the side
--- pieces, because pieces in one layer are sorted by position rather than drawn in order. Where four chests meet, the
--- front pieces of both northern chests run up to the seam between them and so close the middle.
+-- Draws the links to the east and south of every member, so that every link is drawn once, and an overlay over every
+-- member that redraws its sprite without the frame towards linked neighbours (data-final-fixes.lua). Overlays in one
+-- layer are sorted by position, so the lid of a chest is drawn over the front of the linked chest to its north. The
+-- real logistic chest keeps its animated robot door unless it has to cover a chest to its north.
 local function draw_links(members)
   for _, entity in pairs(members) do
     local key = tile_key(entity.position)
     clear_renders(entity.surface.index, key)
     local objects = {}
-    local pieces = seam_pieces(base_name(entity))
-    local links = {}
-    for _, dir in pairs({ DIRS[2], DIRS[3] }) do
+    local mask = 0
+    for _, dir in pairs(DIRS) do
       local other = neighbour(entity, dir)
       if other and is_linked(entity, dir, other) then
-        objects[#objects + 1] = rendering.draw_line({
-          surface = entity.surface,
-          from = { entity = entity, offset = { dir.dx * 0.3, dir.dy * 0.3 } },
-          to = { entity = other, offset = { -dir.dx * 0.3, -dir.dy * 0.3 } },
-          color = { 0.9, 0.6, 0.1, 0.9 },
-          width = 6,
-          only_in_alt_mode = true,
-        })
-        links[dir.name] = other
+        mask = mask + dir.bit
+        if dir.dx > 0 or dir.dy > 0 then
+          objects[#objects + 1] = rendering.draw_line({
+            surface = entity.surface,
+            from = { entity = entity, offset = { dir.dx * 0.3, dir.dy * 0.3 } },
+            to = { entity = other, offset = { -dir.dx * 0.3, -dir.dy * 0.3 } },
+            color = { 0.9, 0.6, 0.1, 0.9 },
+            width = 6,
+            only_in_alt_mode = true,
+          })
+        end
       end
     end
-    if pieces and links.east then
-      draw_seam(objects, entity, pieces.side, pieces.side.sprite, "higher-object-under")
-    end
-    if pieces and links.south then
-      local west = neighbour(entity, DIRS[4])
-      local open = ((west and is_linked(entity, DIRS[4], west) and is_cross(west, entity)) and "w" or "")
-        .. ((links.east and is_cross(entity, links.east)) and "e" or "")
-      draw_seam(objects, entity, pieces.front, pieces.front.sprites[open], "higher-object-above")
+    local base = base_name(entity)
+    local info = overlay_info(base)
+    if info and mask > 0 then
+      local sprite = "expandable-chests-overlay-" .. base .. "-" .. mask
+      if info.door and not is_proxy(entity) and band(mask, 1) == 0 then
+        sprite = sprite .. "-door"
+      end
+      objects[#objects + 1] = rendering.draw_sprite({
+        sprite = sprite,
+        surface = entity.surface,
+        target = entity,
+        render_layer = "higher-object-under",
+      })
     end
     surface_table(storage.renders, entity.surface.index)[key] = objects
   end
@@ -1020,7 +1006,7 @@ end
 
 -- Registration -------------------------------------------------------------------------------------------------------
 
--- Redraws every linked group, for example when the seam pieces of a chest changed with a mod update.
+-- Redraws every linked group, for example when the overlays of a chest changed with a mod update.
 local function redraw_all()
   local seen = {}
   for surface_index, masks in pairs(storage.masks) do
