@@ -23,7 +23,7 @@ SOURCE = "https://github.com/vertexvaar/factorio-expandable-chests"
 CATEGORY = "content"
 LICENSE = "default_mit"
 TAGS = ["storage", "logistics", "circuit-network"]
-IMAGES = ["previews/portal/6-overview.png", "previews/portal/1-proxy-window.png", "previews/portal/4-requester-window.png"]
+IMAGES = ["previews/portal/6-overview.png", "previews/portal/7-all-chests.png", "previews/portal/1-proxy-window.png", "previews/portal/4-requester-window.png"]
 
 
 def api_key():
