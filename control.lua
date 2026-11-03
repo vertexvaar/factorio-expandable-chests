@@ -30,6 +30,7 @@ local function init_storage()
   storage.upgrading = storage.upgrading or {} -- [surface index][tile key] = mask before marked for upgrade
   storage.opened = storage.opened or {} -- [player index] = {entity = chest of the panel, window = entity of the window}
   storage.redirect = storage.redirect or {} -- [player index] = logistic proxy whose master window is being opened
+  storage.muted = storage.muted or {} -- [surface index][tile key] = reading this mod switched off (READ_* bits)
 end
 
 -- Entity helpers -----------------------------------------------------------------------------------------------------
@@ -169,6 +170,8 @@ local function swap(entity, name)
   local upgrade_target, upgrade_quality = entity.get_upgrade_target()
   local behavior = entity.get_control_behavior()
   local read_contents = behavior and behavior.read_contents
+  local read_empty_slots = behavior and behavior.read_empty_slots
+  local empty_slots_signal = behavior and behavior.empty_slots_signal
   local wires = {}
   for _, id in pairs({ defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }) do
     local connector = entity.get_wire_connector(id, false)
@@ -204,10 +207,14 @@ local function swap(entity, name)
       new.get_wire_connector(wire.id, true).connect_to(wire.target, false, wire.origin)
     end
   end
-  if read_contents == false then
+  if read_contents == false or read_empty_slots then
     local new_behavior = new.get_or_create_control_behavior()
     if new_behavior and new_behavior.read_contents ~= nil then
-      new_behavior.read_contents = false
+      new_behavior.read_contents = read_contents ~= false
+      new_behavior.read_empty_slots = read_empty_slots or false
+      if empty_slots_signal then
+        new_behavior.empty_slots_signal = empty_slots_signal
+      end
     end
   end
   if marked then
@@ -287,6 +294,197 @@ local function draw_links(members)
   end
 end
 
+-- Reports ------------------------------------------------------------------------------------------------------------
+
+-- What a player action changed beyond the links themselves, shown to that player as flying text afterwards.
+local report
+
+local function begin_report()
+  report = { muted = 0, unmuted = 0, spilled = 0, requests = 0 }
+end
+
+local function note(key, n)
+  if report then
+    report[key] = report[key] + (n or 1)
+  end
+end
+
+-- Shows the collected changes, plus `lines` given by the caller, one below the other at `position`.
+local function end_report(player, position, lines)
+  local collected = report
+  report = nil
+  if not (player and player.valid and collected) then
+    return
+  end
+  lines = lines or {}
+  if collected.muted > 0 then
+    lines[#lines + 1] = { "expandable-chests.flying-muted", collected.muted }
+  end
+  if collected.unmuted > 0 then
+    lines[#lines + 1] = { "expandable-chests.flying-unmuted", collected.unmuted }
+  end
+  if collected.requests > 0 then
+    lines[#lines + 1] = { "expandable-chests.flying-requests", collected.requests }
+  end
+  if collected.spilled > 0 then
+    lines[#lines + 1] = { "expandable-chests.flying-spilled", collected.spilled }
+  end
+  for i, text in ipairs(lines) do
+    player.create_local_flying_text({
+      text = text,
+      position = { position.x, position.y + (i - 1) * 0.7 },
+      time_to_live = 180 + 30 * #lines,
+      speed = 0.5,
+    })
+  end
+end
+
+-- Circuit reading ----------------------------------------------------------------------------------------------------
+
+-- Every chest of a group reports the whole group, so two chests of a group on one circuit network count it twice.
+-- When groups change, only one chest per network keeps reading; the others are switched off and remembered, and
+-- switched on again when they are needed to report a network that nobody else of their group reports any more.
+
+local WIRES = { defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }
+local READ_CONTENTS, READ_EMPTY = 1, 2
+
+-- The READ_* bits of what the chest reports to its circuit networks.
+local function reading(entity)
+  local behavior = entity.get_control_behavior()
+  if not behavior then
+    return READ_CONTENTS
+  end
+  return (behavior.read_contents ~= false and READ_CONTENTS or 0) + (behavior.read_empty_slots and READ_EMPTY or 0)
+end
+
+local function network_ids(entity)
+  local ids = {}
+  for _, id in pairs(WIRES) do
+    local network = entity.get_circuit_network(id)
+    if network then
+      ids[network.network_id] = true
+    end
+  end
+  return ids
+end
+
+local function get_muted(entity)
+  local t = storage.muted[entity.surface.index]
+  return t and t[tile_key(entity.position)]
+end
+
+local function set_muted(entity, bits)
+  local t = surface_table(storage.muted, entity.surface.index)
+  t[tile_key(entity.position)] = bits
+end
+
+local function mute(entity, bits)
+  local behavior = entity.get_or_create_control_behavior()
+  behavior.read_contents = false
+  behavior.read_empty_slots = false
+  set_muted(entity, bits)
+end
+
+-- Switches reading on again if this mod switched it off.
+local function unmute(entity)
+  local bits = get_muted(entity)
+  if not bits then
+    return false
+  end
+  set_muted(entity, nil)
+  local behavior = entity.get_or_create_control_behavior()
+  behavior.read_contents = band(bits, READ_CONTENTS) ~= 0
+  behavior.read_empty_slots = band(bits, READ_EMPTY) ~= 0
+  return true
+end
+
+-- Makes sure that every circuit network a group is wired to gets the group's contents exactly once. `master` reads
+-- first, so it is the one that keeps reading where it can.
+local function balance_readers(members, master)
+  local nets, wired = {}, false
+  for i, member in pairs(members) do
+    local ids = network_ids(member)
+    nets[i] = ids
+    wired = wired or next(ids) ~= nil
+  end
+  if not wired then
+    for _, member in pairs(members) do
+      unmute(member)
+    end
+    return
+  end
+  local order = {}
+  for i, member in pairs(members) do
+    if member == master then
+      table.insert(order, 1, i)
+    else
+      order[#order + 1] = i
+    end
+  end
+
+  local covered = {}
+  for _, i in ipairs(order) do
+    local member, ids = members[i], nets[i]
+    local bits = reading(member)
+    if bits ~= 0 then
+      -- Reading again although this mod switched it off: the player switched it on, so it is theirs now.
+      set_muted(member, nil)
+      if next(ids) then
+        local new = false
+        for id in pairs(ids) do
+          new = new or not covered[id]
+        end
+        if new then
+          -- A chest on two networks of which only one is reported already keeps reading; the panel warns about it.
+          for id in pairs(ids) do
+            covered[id] = true
+          end
+        else
+          mute(member, bits)
+          note("muted")
+        end
+      end
+    end
+  end
+  for _, i in ipairs(order) do
+    local member, ids = members[i], nets[i]
+    if get_muted(member) then
+      local needed = next(ids) == nil
+      for id in pairs(ids) do
+        needed = needed or not covered[id]
+      end
+      if needed and unmute(member) then
+        if next(ids) then
+          note("unmuted")
+        end
+        for id in pairs(ids) do
+          covered[id] = true
+        end
+      end
+    end
+  end
+end
+
+-- Logistic chests that request something or take requests from the circuit network; a proxy can do neither.
+local function has_requests(entity)
+  if entity.type ~= "logistic-container" then
+    return false
+  end
+  local behavior = entity.get_control_behavior()
+  if behavior and behavior.set_requests then
+    return true
+  end
+  local sections = entity.get_logistic_sections()
+  if sections then
+    for _, section in pairs(sections.sections) do
+      if section.filters_count > 0 then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 -- Group maintenance --------------------------------------------------------------------------------------------------
 
 -- Restores the invariant (one real master per group with the summed size, proxies pointing at it) for all groups
@@ -318,12 +516,15 @@ local function normalize(seeds, extra, sink)
   local masters = {}
   for g, members in pairs(groups) do
     local total = 0
-    local master
+    local master, master_requests
     for _, member in pairs(members) do
       total = total + base_size(member)
       if not is_proxy(member) then
-        if not master or #member.get_inventory(CHEST) > #master.get_inventory(CHEST) then
-          master = member
+        -- The biggest real chest stays the master; among single chests one with requests, which a proxy would lose.
+        local requests = #members > 1 and has_requests(member)
+        local size, best = #member.get_inventory(CHEST), master and #master.get_inventory(CHEST)
+        if not master or size > best or (size == best and requests and not master_requests) then
+          master, master_requests = member, requests
         end
       end
     end
@@ -332,10 +533,14 @@ local function normalize(seeds, extra, sink)
     -- Every other real chest hands its items to the pool and becomes a proxy.
     for i, member in pairs(members) do
       if member ~= master and not is_proxy(member) then
+        if has_requests(member) then
+          note("requests")
+        end
         local inventory = member.get_inventory(CHEST)
         move_all(inventory, pool)
         if not inventory.is_empty() then
           -- The pool is sized to hold everything, so this only happens with exotic items.
+          note("spilled", #inventory - inventory.count_empty_stacks())
           spill(inventory, member.surface, member.position, member.force)
         end
         members[i] = swap(member, PREFIX .. base_name(member))
@@ -376,13 +581,14 @@ local function normalize(seeds, extra, sink)
         move_all(leftovers, sink)
       end
       if not leftovers.is_empty() then
+        note("spilled", #leftovers - leftovers.count_empty_stacks())
         spill(leftovers, first.surface, first.position, first.force)
       end
     end
   end
   pool.destroy()
 
-  for _, members in pairs(groups) do
+  for g, members in pairs(groups) do
     local valid = {}
     for _, member in pairs(members) do
       if member and member.valid then
@@ -390,6 +596,7 @@ local function normalize(seeds, extra, sink)
       end
     end
     draw_links(valid)
+    balance_readers(valid, masters[g])
   end
 end
 
@@ -428,6 +635,7 @@ local function detach(entity, sink)
   local mask = get_mask(entity)
   set_mask(entity, 0)
   clear_renders(surface_index, key)
+  unmute(entity)
   if #members == 1 then
     return mask
   end
@@ -532,6 +740,10 @@ local function on_built(event)
     return
   end
   local mask = event.tags and event.tags.expandable_chests_mask
+  local muted = event.tags and event.tags.expandable_chests_muted
+  if muted and reading(entity) == 0 then
+    set_muted(entity, muted)
+  end
   local upgrading = storage.upgrading[entity.surface.index]
   local key = tile_key(entity.position)
   if upgrading and upgrading[key] then
@@ -554,6 +766,7 @@ local function on_built(event)
   mask = mask or 0
   set_mask(entity, mask)
   if mask == 0 and not is_proxy(entity) and not replaced then
+    unmute(entity)
     return
   end
   local seeds = { entity }
@@ -563,7 +776,10 @@ local function on_built(event)
       seeds[#seeds + 1] = other
     end
   end
+  local player = event.player_index and game.get_player(event.player_index)
+  begin_report()
   normalize(seeds)
+  end_report(player, entity.position)
 end
 
 local function on_pre_mined(event)
@@ -730,6 +946,7 @@ local function on_marked_for_upgrade(event)
     saved[tile_key(member.position)] = get_mask(member)
     set_mask(member, 0)
     clear_renders(surface.index, tile_key(member.position))
+    unmute(member)
     if not is_proxy(member) then
       master = member
       capacity = capacity + #member.get_inventory(CHEST)
@@ -790,6 +1007,12 @@ local function on_setup_blueprint(event)
         entry.tags.expandable_chests_mask = mask
         changed = true
       end
+      local muted = get_muted(entity)
+      if muted then
+        entry.tags = entry.tags or {}
+        entry.tags.expandable_chests_muted = muted
+        changed = true
+      end
     end
   end
   if changed then
@@ -798,6 +1021,8 @@ local function on_setup_blueprint(event)
 end
 
 -- GUI ----------------------------------------------------------------------------------------------------------------
+
+local refresh_panels
 
 local function researched(force)
   local technology = force.technologies[shared.technology]
@@ -822,24 +1047,6 @@ end
 
 -- Circuit reading ----------------------------------------------------------------------------------------------------
 
-local WIRES = { defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green }
-
-local function reads_contents(entity)
-  local behavior = entity.get_control_behavior()
-  return not behavior or behavior.read_contents ~= false
-end
-
-local function network_ids(entity)
-  local ids = {}
-  for _, id in pairs(WIRES) do
-    local network = entity.get_circuit_network(id)
-    if network then
-      ids[network.network_id] = true
-    end
-  end
-  return ids
-end
-
 -- Other chests of the group that report the group's contents to a circuit network this chest is on as well.
 -- Only checked when a chest window opens, so it costs nothing while the game runs.
 local function duplicate_readers(entity)
@@ -849,7 +1056,7 @@ local function duplicate_readers(entity)
   end
   local result = {}
   for _, member in pairs(component(entity)) do
-    if member ~= entity and reads_contents(member) then
+    if member ~= entity and reading(member) ~= 0 then
       for id in pairs(network_ids(member)) do
         if ids[id] then
           result[#result + 1] = member
@@ -864,9 +1071,10 @@ end
 -- Lets only this chest report the group to the networks it shares with other chests of the group.
 local function make_sole_reader(entity)
   for _, member in pairs(duplicate_readers(entity)) do
-    member.get_or_create_control_behavior().read_contents = false
+    mute(member, reading(member))
   end
   entity.get_or_create_control_behavior().read_contents = true
+  set_muted(entity, nil)
 end
 
 -- Shows the side switches of `entity` next to the open window of `window`.
@@ -919,7 +1127,7 @@ local function build_panel(player, entity, window)
     slots = slots + base_size(member)
   end
   inner.add({ type = "label", caption = { "expandable-chests.group-size", #members, math.min(slots, MAX_SLOTS) } })
-  local duplicates = reads_contents(entity) and #duplicate_readers(entity) or 0
+  local duplicates = reading(entity) ~= 0 and #duplicate_readers(entity) or 0
   if duplicates > 0 then
     local warning = inner.add({ type = "label", caption = { "expandable-chests.double-count", duplicates + 1 } })
     warning.style.single_line = false
@@ -975,6 +1183,25 @@ local function on_gui_closed(event)
   end
 end
 
+-- Rebuilds the panels of all players (but `except`), since a change may have touched the chest one of them looks at.
+refresh_panels = function(except)
+  for index, opened in pairs(storage.opened) do
+    local player = game.get_player(index)
+    if player and player ~= except then
+      local entity, window = opened.entity, opened.window
+      if player.valid and entity and entity.valid and window and window.valid and player.opened == window
+        and window_of(entity) == window then
+        build_panel(player, entity, window)
+      else
+        storage.opened[index] = nil
+        if player.valid then
+          destroy_panel(player)
+        end
+      end
+    end
+  end
+end
+
 local function on_gui_click(event)
   local element = event.element
   local tags = element.valid and element.tags
@@ -996,12 +1223,110 @@ local function on_gui_click(event)
   end
   local dir = DIRS[side]
   local other = neighbour(entity, dir)
+  local position = entity.position
+  begin_report()
   local chest = set_link(entity, dir, not (other and is_linked(entity, dir, other)))
+  end_report(player, position)
   if chest and chest.valid then
     show(player, chest)
   else
     destroy_panel(player)
   end
+  refresh_panels(player)
+end
+
+-- Quick link tool ----------------------------------------------------------------------------------------------------
+
+-- Chests waiting for robots to remove or upgrade them stay out of groups.
+local function busy(entity)
+  return entity.to_be_deconstructed() or entity.to_be_upgraded()
+end
+
+-- Links all neighbouring chests of the same type within `entities` to each other, or with `link` false cuts every
+-- side of them, also towards chests outside. Returns the number of links made or cut and of busy chests skipped.
+-- All groups are rebuilt once at the end, so big selections cost one pass.
+local function link_area(entities, link)
+  local chests, skipped = {}, 0
+  for _, entity in pairs(entities) do
+    if entity.valid and base_name(entity) then
+      if busy(entity) then
+        skipped = skipped + 1
+      else
+        chests[entity.unit_number] = entity
+      end
+    end
+  end
+  local seeds, changed = {}, 0
+  if link then
+    for _, entity in pairs(chests) do
+      for _, dir in pairs(DIRS) do
+        if dir.dx > 0 or dir.dy > 0 then
+          local other = neighbour(entity, dir)
+          if other and chests[other.unit_number] and not is_linked(entity, dir, other) then
+            set_mask(entity, bor(get_mask(entity), dir.bit))
+            set_mask(other, bor(get_mask(other), dir.opposite))
+            changed = changed + 1
+            seeds[#seeds + 1] = entity
+          end
+        end
+      end
+    end
+  else
+    local cut = {}
+    for _, entity in pairs(chests) do
+      local mask = get_mask(entity)
+      if mask ~= 0 then
+        for _, dir in pairs(DIRS) do
+          if band(mask, dir.bit) ~= 0 then
+            local other = neighbour(entity, dir)
+            if other then
+              if is_linked(entity, dir, other) then
+                local a, b = entity.unit_number, other.unit_number
+                cut[a < b and a .. ":" .. b or b .. ":" .. a] = true
+              end
+              set_mask(other, band(get_mask(other), bnot(dir.opposite)))
+              seeds[#seeds + 1] = other
+            end
+          end
+        end
+        set_mask(entity, 0)
+        -- Seeded as well: a chest cut off is a group of its own now and has to become a real chest again.
+        seeds[#seeds + 1] = entity
+      end
+    end
+    changed = table_size(cut)
+  end
+  if #seeds > 0 then
+    normalize(seeds)
+  end
+  return changed, skipped
+end
+
+local function on_selected_area(event, link)
+  if event.item ~= shared.tool then
+    return
+  end
+  local player = game.get_player(event.player_index)
+  if not player then
+    return
+  end
+  local area = event.area
+  local position = {
+    x = (area.left_top.x + area.right_bottom.x) / 2,
+    y = (area.left_top.y + area.right_bottom.y) / 2,
+  }
+  if not researched(player.force) then
+    player.create_local_flying_text({ text = { "expandable-chests.flying-research" }, position = position })
+    return
+  end
+  begin_report()
+  local changed, skipped = link_area(event.entities, link)
+  local lines = { { link and "expandable-chests.flying-linked" or "expandable-chests.flying-unlinked", changed } }
+  if skipped > 0 then
+    lines[2] = { "expandable-chests.flying-busy", skipped }
+  end
+  end_report(player, position, lines)
+  refresh_panels()
 end
 
 -- Registration -------------------------------------------------------------------------------------------------------
@@ -1066,6 +1391,12 @@ script.on_event(defines.events.on_player_setup_blueprint, on_setup_blueprint)
 script.on_event(defines.events.on_gui_opened, on_gui_opened)
 script.on_event(defines.events.on_gui_closed, on_gui_closed)
 script.on_event(defines.events.on_gui_click, on_gui_click)
+script.on_event(defines.events.on_player_selected_area, function(event)
+  on_selected_area(event, true)
+end)
+script.on_event(defines.events.on_player_alt_selected_area, function(event)
+  on_selected_area(event, false)
+end)
 
 -- Used by the tests and by other mods.
 remote.add_interface("expandable-chests", {
@@ -1085,6 +1416,18 @@ remote.add_interface("expandable-chests", {
   -- Runs the blueprint fix-up on a blueprint made by create_blueprint, for tests.
   setup_blueprint = function(stack, mapping)
     on_setup_blueprint({ stack = stack, mapping = { get = function() return mapping end } })
+  end,
+  -- Runs the quick link tool over the given entities: link true links them, false cuts them off. Returns the report.
+  link_area = function(entities, link)
+    begin_report()
+    local changed, skipped = link_area(entities, link)
+    local result = report
+    report = nil
+    result.changed, result.skipped = changed, skipped
+    return result
+  end,
+  muted = function(entity)
+    return get_muted(entity)
   end,
   duplicate_readers = function(entity)
     return duplicate_readers(entity)
