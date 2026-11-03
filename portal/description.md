@@ -12,6 +12,10 @@ Open any chest and a **Linked chests** panel appears next to its window. Click *
 - A logistic group acts as one big chest: its requests and settings apply to the whole group, no matter which chest you open.
 - Alt mode shows the links as orange bars.
 
+## Linking many chests at once
+
+Click the **Link chests** shortcut (or bind a key to it in the controls) and drag over your chests: every neighbour of the same type and quality inside the area is linked. **Shift-drag** cuts every side of the selected chests, which also cuts a single chest out of a group. A short text tells you what changed. The game's undo does not cover this tool, shift-drag is the way back.
+
 ## Building and removing
 
 - **Blueprints** keep the links. Robots build linked groups straight from a blueprint.
@@ -21,7 +25,9 @@ Open any chest and a **Linked chests** panel appears next to its window. Click *
 
 ## Circuit network
 
-Every chest of a group reports the contents of the whole group. If several chests of the same group are wired to one network, the panel warns that the contents are counted more than once and offers **Only this chest reports** with a single click.
+Every chest of a group reports the contents of the whole group. So that nothing is counted twice, only one chest of a group reports to each network: when chests are linked, the others switch "Read contents" off, and a text tells you how many. When the group is split or the reporting chest is removed, they switch it back on by themselves. Chests where you switched reading off yourself stay off.
+
+If you wire another chest of a group to the same network later, the panel warns that the contents are counted more than once and offers **Only this chest reports** with a single click.
 
 ## Performance
 
@@ -37,7 +43,6 @@ Research **Expandable chests**. It has the same tier, cost and prerequisites as 
 
 **Merging Chests may suit you if you like**
 - one large chest, warehouse or trash dump with its own matching graphics
-- merging and splitting many chests at once with a selection tool
 - fine control through mod settings: maximum sizes, inventory multipliers and which chest types can merge
 
 **Expandable Chests may suit you if you like**

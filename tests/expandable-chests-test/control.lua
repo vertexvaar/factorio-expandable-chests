@@ -398,7 +398,172 @@ tests[#tests + 1] = function()
   check("overlays after unlink", overlays(36) == expected, overlays(36))
 end
 
+-- Quick link tool ------------------------------------------------------------------------------------------------------
+-- Runs at x 15..38, away from the tests above. `later[tick]` holds checks that need the circuit networks to update.
+local later = {}
+
+local function row(name, x1, x2, y)
+  local list = {}
+  for x = x1, x2 do
+    list[#list + 1] = chest(name, x, y)
+  end
+  return list
+end
+
+local function cells(x1, y1, x2, y2)
+  local list = {}
+  for x = x1, x2 do
+    for y = y1, y2 do
+      local e = at(x, y)
+      if e then
+        list[#list + 1] = e
+      end
+    end
+  end
+  return list
+end
+
+local function tool(link, x1, y1, x2, y2)
+  return call("link_area", cells(x1, y1, x2, y2), link)
+end
+
+local function total(list, item)
+  local n = 0
+  for _, e in pairs(list) do
+    if not is_proxy(e) then
+      n = n + count(e, item)
+    end
+  end
+  return n
+end
+
+-- Links a 3x2 block, leaves the iron chest next to it and a chest of other quality alone; a second pass changes nothing.
+tests[#tests + 1] = function()
+  row("steel-chest", 15, 17, 12); row("steel-chest", 15, 17, 13)
+  chest("iron-chest", 18, 12)
+  local r = tool(true, 15, 12, 18, 13)
+  check("tool links 3x2", r.changed == 7 and #call("group", at(15, 12)) == 6, r.changed .. " " .. #call("group", at(15, 12)))
+  check("tool skips other type", #call("group", at(18, 12)) == 1)
+  r = tool(true, 15, 12, 18, 13)
+  check("tool second pass", r.changed == 0, r.changed)
+  -- Cutting the middle chest of the top row out: its three sides go, the rest stays one group.
+  r = tool(false, 16, 12, 16, 12)
+  check("tool cuts one chest", r.changed == 3 and #call("group", at(16, 12)) == 1 and #call("group", at(15, 12)) == 5,
+    r.changed .. " " .. #call("group", at(16, 12)) .. " " .. #call("group", at(15, 12)))
+  check("cut chest is real", not is_proxy(at(16, 12)))
+end
+
+-- Splitting a full group keeps every item: the capacity of the parts adds up to the group's.
+tests[#tests + 1] = function()
+  clear_ground()
+  row("steel-chest", 15, 17, 15)
+  tool(true, 15, 15, 17, 15)
+  local stacks = 3 * 48
+  local inserted = fill(at(15, 15), "iron-plate", stacks * 100)
+  local r = tool(false, 15, 15, 17, 15)
+  local list = cells(15, 15, 17, 15)
+  check("full split keeps items", inserted == stacks * 100 and total(list, "iron-plate") == inserted and ground("iron-plate") == 0
+    and r.spilled == 0, inserted .. " " .. total(list, "iron-plate") .. " ground " .. ground("iron-plate"))
+end
+
+-- Three chests on one network: linking leaves one reader, cutting them apart again lets all three read their own share.
+tests[#tests + 1] = function()
+  local list = row("steel-chest", 15, 17, 18)
+  local pole = surface.create_entity({ name = "small-electric-pole", position = { 16.5, 19.5 }, force = force })
+  for _, e in pairs(list) do
+    wire(e, pole)
+  end
+  list[3].get_or_create_control_behavior().read_empty_slots = true
+  local r = tool(true, 15, 18, 17, 18)
+  check("tool mutes duplicates", r.muted == 2, r.muted)
+  fill(at(15, 18), "copper-plate", 600)
+  later[400] = later[400] or {}
+  table.insert(later[400], function()
+    check("muted group counts once", signal(at(16, 18), "copper-plate") == 600, signal(at(16, 18), "copper-plate"))
+    local u = tool(false, 15, 18, 17, 18)
+    check("tool unmutes", u.unmuted == 2, u.unmuted)
+    check("empty slot reading restored", at(17, 18).get_control_behavior().read_empty_slots == true)
+    check("no muted left", not call("muted", at(15, 18)) and not call("muted", at(16, 18)) and not call("muted", at(17, 18)))
+  end)
+  later[420] = later[420] or {}
+  table.insert(later[420], function()
+    check("split chests count their share", signal(at(16, 18), "copper-plate") == 600, signal(at(16, 18), "copper-plate"))
+  end)
+end
+
+-- The reader leaves the group: a muted chest takes over.
+tests[#tests + 1] = function()
+  local list = row("steel-chest", 15, 17, 22)
+  local pole = surface.create_entity({ name = "small-electric-pole", position = { 16.5, 23.5 }, force = force })
+  for _, e in pairs(list) do
+    wire(e, pole)
+  end
+  tool(true, 15, 22, 17, 22)
+  local reader
+  for _, e in pairs(cells(15, 22, 17, 22)) do
+    if not call("muted", e) then
+      reader = e
+    end
+  end
+  reader.destroy({ raise_destroy = true })
+  local readers = 0
+  for _, e in pairs(cells(15, 22, 17, 22)) do
+    local b = e.get_control_behavior()
+    if not b or b.read_contents then
+      readers = readers + 1
+    end
+  end
+  check("reader replaced after removal", readers == 1, readers)
+end
+
+-- Requests: a requesting chest becomes the master when linked with a chest that requests nothing; two requesting
+-- chests lose the requests of one, which is reported.
+tests[#tests + 1] = function()
+  if not prototypes.entity["requester-chest"] then
+    return
+  end
+  local a, b = chest("requester-chest", 15, 26), chest("requester-chest", 16, 26)
+  b.get_requester_point().get_section(1).set_slot(1, { value = { name = "iron-plate", quality = "normal" }, min = 50 })
+  local r = tool(true, 15, 26, 16, 26)
+  check("requesting chest stays master", not is_proxy(at(16, 26)) and r.requests == 0, tostring(is_proxy(at(16, 26))) .. " " .. r.requests)
+  local c, d = chest("requester-chest", 15, 28), chest("requester-chest", 16, 28)
+  c.get_requester_point().get_section(1).set_slot(1, { value = { name = "iron-plate", quality = "normal" }, min = 50 })
+  d.get_or_create_control_behavior().set_requests = true
+  r = tool(true, 15, 28, 16, 28)
+  check("lost requests reported", r.requests == 1, r.requests)
+  local proxy = is_proxy(at(15, 28)) and at(15, 28) or at(16, 28)
+  local behavior = proxy.get_or_create_control_behavior()
+  log_line("INFO proxy control behavior", behavior and behavior.object_name)
+end
+
+-- 400 chests in one go.
+tests[#tests + 1] = function()
+  for x = 15, 34 do
+    row("steel-chest", x, x, -9)
+    for y = -8, 10 do
+      chest("steel-chest", x, y)
+    end
+  end
+  local profiler = helpers.create_profiler()
+  local r = tool(true, 15, -9, 34, 10)
+  profiler.stop()
+  log({ "", "ECTEST INFO 20x20 link ", profiler })
+  check("20x20 linked", r.changed == 760 and #call("group", at(20, 0)) == 400, r.changed)
+  profiler.reset()
+  r = tool(false, 15, -9, 34, 10)
+  profiler.stop()
+  log({ "", "ECTEST INFO 20x20 cut ", profiler })
+  check("20x20 cut", r.changed == 760 and #call("group", at(20, 0)) == 1, r.changed)
+end
+
 script.on_event(defines.events.on_tick, function(event)
+  for _, fn in pairs(later[event.tick] or {}) do
+    local ok, err = pcall(fn)
+    if not ok then
+      failures = failures + 1
+      log_line("FAIL", "late check crashed:", err)
+    end
+  end
   if event.tick == 5 then
     surface, force = game.surfaces[1], game.forces.player
     surface.request_to_generate_chunks({ 0, 0 }, 3)
@@ -428,6 +593,7 @@ script.on_event(defines.events.on_tick, function(event)
     check_circuits()
   elseif event.tick == 420 then
     check("sole reader counts once", signal(at(1, 33), "copper-plate") == 300, signal(at(1, 33), "copper-plate"))
+  elseif event.tick == 440 then
     log_line("DONE", failures == 0 and "all passed" or (failures .. " failures"))
   end
 end)

@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.0
+Date: 2026-11-03
+  Features:
+    - Chest linker tool (shortcut "Link chests", control can be bound in the settings): drag over chests to link all neighbours of the same type and quality, shift-drag to cut every side of the selected chests.
+    - Only one chest of a group reports to each circuit network; the others stop reading so the contents are not counted twice, and read again when the group is split or the reader is removed.
+    - Flying texts tell when chests stop or start reporting to a circuit network, when requests are dropped and when items had to be put on the ground.
+  Changes:
+    - When two logistic chests link, one that requests something stays the main chest.
+  Bugfixes:
+    - "Read empty slots" and its signal are kept when a chest joins or leaves a group.
+    - Splitting big groups is much faster.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.1
 Date: 2026-10-31
   Graphics:
