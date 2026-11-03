@@ -7,6 +7,8 @@ like the cargo bays of a space platform hub. Each side is switched on or off in 
 - Only chests of the same type and quality link. Capacity is the sum of all linked chests.
 - Unlocked by the technology "Expandable chests" (same tier and cost as fluid handling).
 - Links are kept in blueprints. Removing a chest takes its share of the items with it.
+- The chest linker (shortcut "Link chests") links all chests in a dragged area at once; shift-drag cuts them apart.
+- Only one chest of a group reports to a circuit network, so the contents are never counted twice.
 - Upgrading or fast-replacing chests keeps their links: an upgraded group splits into single chests with their share
   of the items and links up again as soon as the neighbours have the new type too.
 
@@ -21,7 +23,6 @@ for look-alike proxy containers that forward inserters, robots and the player to
 
 **Merging Chests may suit you if you like**
 - one large chest, warehouse or trash dump with its own matching graphics
-- merging and splitting many chests at once with a selection tool
 - fine control through mod settings: maximum sizes, inventory multipliers and which chest types can merge
 
 **Expandable Chests may suit you if you like**
