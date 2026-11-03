@@ -132,7 +132,7 @@ end
 
 -- Moves every stack of one inventory into another as far as it fits.
 local function move_all(from, to)
-  if not (from and to) then
+  if not (from and to) or from.is_empty() then
     return
   end
   for i = 1, #from do
@@ -571,8 +571,35 @@ local function normalize(seeds, extra, sink)
   for _, master in pairs(masters) do
     move_all(extra, master.get_inventory(CHEST))
   end
-  for _, master in pairs(masters) do
-    move_all(pool, master.get_inventory(CHEST))
+  -- The pool can hold the items of many groups; sorted, its stacks come first and each slot is visited once, so
+  -- splitting a big group into many single chests stays linear.
+  if not pool.is_empty() then
+    pool.sort_and_merge()
+    local cursor, slots = 1, #pool
+    for _, master in pairs(masters) do
+      local inventory = master.get_inventory(CHEST)
+      while cursor <= slots do
+        local stack = pool[cursor]
+        if not stack.valid_for_read then
+          cursor = slots + 1
+          break
+        end
+        local empty = inventory.find_empty_stack()
+        if empty then
+          empty.transfer_stack(stack)
+        end
+        if stack.valid_for_read then
+          local inserted = inventory.insert(stack)
+          if inserted > 0 then
+            stack.count = stack.count - inserted
+          end
+        end
+        if stack.valid_for_read then
+          break
+        end
+        cursor = cursor + 1
+      end
+    end
   end
   local first = masters[1]
   for _, leftovers in pairs({ pool, extra }) do
@@ -777,9 +804,10 @@ local function on_built(event)
     end
   end
   local player = event.player_index and game.get_player(event.player_index)
+  local position = entity.position
   begin_report()
   normalize(seeds)
-  end_report(player, entity.position)
+  end_report(player, position)
 end
 
 local function on_pre_mined(event)
